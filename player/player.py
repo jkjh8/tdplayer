@@ -5,10 +5,12 @@ from _thread import *
 from player_api import api
 from time_format import timeFormat
 from pymongo import MongoClient
-from PyQt5.QtWidgets import QApplication, QLabel, QWidget
-from PyQt5.QtMultimediaWidgets import QVideoWidget
-from PyQt5.QtCore import Qt, pyqtSlot, pyqtSignal, QThread
-from PyQt5.QtGui import QIcon, QPixmap
+from PyQt5.QtWidgets import *
+from PyQt5.QtMultimediaWidgets import *
+from PyQt5.QtMultimedia import *
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
+from PyQt5.QtNetwork import *
 
 db_client = MongoClient("mongodb://localhost:27017/MediaServer")
 db = db_client['MediaServer']
