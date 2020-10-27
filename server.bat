@@ -1,0 +1,1 @@
+"C:\python\python" "C:\Program Files\MediaServer\server\app.py"

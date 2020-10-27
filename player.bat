@@ -1,0 +1,1 @@
+"C:\python\pythonw" "C:\Program Files\MediaServer\player\player.py"
