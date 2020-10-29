@@ -19,7 +19,7 @@ instance = vlc.Instance()
 player = instance.media_player_new()
 
 port = 12302
-MEDIA_PATH = os.path.abspath('./media/')
+MEDIA_PATH = os.path.join(os.path.expanduser("~"),'media')
 
 class PlayerServer(QVideoWidget):
     songFinishedEvent = pyqtSignal()
@@ -30,6 +30,7 @@ class PlayerServer(QVideoWidget):
         self.mediafile = None
         self.curr_time = None
         self.duration = None
+        self.fullscreenCurrent = False
         self.udpServer = udpServer()
         self.udpServer.start()
         self.udpServer.play.connect(self.play)
@@ -38,15 +39,18 @@ class PlayerServer(QVideoWidget):
         self.udpServer.fullscreen.connect(self.fullscreen)
         self.udpServer.udpSender.connect(self.udpSender)
         self.songFinishedEvent.connect(self.udpServer.songFinished)
-        self.setup = db.setup.find_one({})
         self.setNewPlayer()       
         self.show()
-        if self.setup['fullscreen'] == True:
-            self.fullscreenCurrent = True
-            self.player.set_fullscreen(True)
-        else:
-            self.fullscreenCurrent = False
+
+        self.setup = db.setup.find_one({})
+        print (self.setup)
         try:
+            if self.setup['fullscreen'] == True:
+                self.fullscreen()
+                self.fullscreenCurrent = True
+            else:
+                self.fullscreenCurrent = False
+
             if self.setup['poweronplay'] == True:
                 file = db.playlist.find_one({'playid': 0}, { 'complete_name': 1 })['complete_name']
                 # sleep(5)
@@ -159,40 +163,52 @@ class udpServer(QThread):
                     self.play_id = int(re.findall('\d+', recv_Msg)[0])
                     self.playId()
                 elif recv_Msg.startswith('play'):
-                    func, file = recv_Msg.split(",")
-                    self.playFile(file)
+                    try:
+                        func, file = recv_Msg.split(",")
+                        self.playFile(file)
+                    except:
+                        pass
                 elif recv_Msg.startswith('refresh'):
                     pass
                 else:
                     msg = api(recv_Msg, db)                          
                     self.udpSender.emit(msg)
-                    self.request_setup()
+                    start_new_thread(self.request_setup, (msg,))
                 self.fullscreen.emit()
             except:
                 self.udpSender("unknown message")
 
-    def request_setup(self):
-        conn = requests.get('http://127.0.0.1:12300/setupfromplayer')
-        print(conn.content)
+    def request_setup(self, msg):
+        try:
+            conn = requests.get('http://127.0.0.1:12300/setupfromplayer')
+            print(conn.content)
+        except:
+            pass
 
     def playId(self):
-        count = db.playlist.count_documents({})
-        if self.play_id <= int(count)-1:
-            file = db.playlist.find_one({'playid': self.play_id}, { 'complete_name': 1 })['complete_name']
-            if os.path.isfile(file):
-                self.udpSender.emit('self.play_id,{}'.format(self.play_id))
-                self.playFile(file)
+        try:
+            count = db.playlist.count_documents({})
+            if self.play_id <= int(count)-1:
+                file = db.playlist.find_one({'playid': self.play_id}, { 'complete_name': 1 })['complete_name']
+                if os.path.isfile(file):
+                    self.udpSender.emit('self.play_id,{}'.format(self.play_id))
+                    self.playFile(file)
+                else:
+                    self.udpSender.emit('file_error')
             else:
-                self.udpSender.emit('file_error')
-        else:
-            self.udpSender.emit('out_of_playlist_range')
+                self.udpSender.emit('out_of_playlist_range')
+        except:
+            self.udpSender.emit('playid error')
 
     def playFile(self, mediaFile):
-        file = os.path.join(MEDIA_PATH, mediaFile)
-        if os.path.isfile(file):
-            self.play.emit(file)
-            self.udpSender.emit('play,{}'.format(mediaFile))
-        else:
+        try:
+            file = os.path.join(MEDIA_PATH, mediaFile)
+            if os.path.isfile(file):
+                self.play.emit(file)
+                self.udpSender.emit('play,{}'.format(mediaFile))
+            else:
+                self.udpSender.emit('file_error')
+        except:
             self.udpSender.emit('file_error')
     
     @pyqtSlot()

@@ -12,11 +12,19 @@ def api(data, db):
         
     elif data.startswith("fullscreen"):
         # currentdbId = db.setup.find_one({},{'_id': 1})
-        if '0' in data or 'false' in data or 'False' in data:
-            value = False
-        else: value = True
+        if '1' in data or 'True' in data or 'true' in data:
+            value = True
+        else: value = False
         db.setup.update_one({"_id": "1"}, { '$set': { 'fullscreen': value }})
         return('fullscreen,{}'.format(value))
+    
+    elif data.startswith("poweronplay"):
+        # currentdbId = db.setup.find_one({},{'_id': 1})
+        if '1' in data or 'True' in data or 'true' in data:
+            value = True
+        else: value = False
+        db.setup.update_one({"_id": "1"}, { '$set': { 'poweronplay': value }})
+        return('poweronplay,{}'.format(value))
 
     elif data.startswith('loop_one'):
         # currentdbId = db.setup.find_one({},{'_id': 1})
@@ -99,3 +107,20 @@ def api(data, db):
         for item in playlist:
             rtList.append("{}.{}".format(item['name'], item['type']).replace("'",""))
         return ('getvideolist_full,{}'.format(','.join(rtList)))
+
+    elif data == ("getfilelist"):
+        filelist = db.filelist.find({},{ 'complete_name': 1, 'name': 1, 'type': 1, 'playid': 1, '_id': False })
+        rtList = []
+        for item in filelist:
+            rtList.append(item['name'].replace("'",""))
+        return ('getfilelist,{}'.format(','.join(rtList)))
+
+    elif data == ("getfilelist_full"):
+        filelist = db.filelist.find({},{ 'complete_name': 1, 'name': 1, 'type': 1, 'playid': 1, '_id': False })
+        rtList = []
+        for item in filelist:
+            rtList.append("{}.{}".format(item['name'], item['type']).replace("'",""))
+        return ('getfilelist_full,{}'.format(','.join(rtList)))
+
+    else:
+        return('unknown message')
