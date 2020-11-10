@@ -21,6 +21,13 @@ player = instance.media_player_new()
 port = 12302
 MEDIA_PATH = os.path.join(os.path.expanduser("~"),'media')
 
+playlist_id = 0
+current_playlist = []
+playlistGroup = []
+for i in range(8):
+    playlistGroup.append(db['playlist_{}'.format(i)])
+
+
 class PlayerServer(QVideoWidget):
     songFinishedEvent = pyqtSignal()
     def __init__(self):
@@ -30,16 +37,19 @@ class PlayerServer(QVideoWidget):
         self.mediafile = None
         self.curr_time = None
         self.duration = None
+        self.playlist_id = None
         self.fullscreenCurrent = False
         self.udpServer = udpServer()
         self.udpServer.start()
+
         self.udpServer.play.connect(self.play)
         self.udpServer.stop.connect(self.stop)
         self.udpServer.pause.connect(self.pause)
         self.udpServer.fullscreen.connect(self.fullscreen)
         self.udpServer.udpSender.connect(self.udpSender)
         self.songFinishedEvent.connect(self.udpServer.songFinished)
-        self.setNewPlayer()       
+
+        self.setNewPlayer()
         self.show()
 
         self.setup = db.setup.find_one({})
@@ -86,7 +96,7 @@ class PlayerServer(QVideoWidget):
     @pyqtSlot(str)
     def udpSender(self, msg):
         self.udpSendSock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udpSendSock.sendto(msg.encode(), (self.setup['rtIp'], self.setup['rtPort']))
+        self.udpSendSock.sendto(msg.encode('utf-16'), (self.setup['rtIp'], self.setup['rtPort']))
         self.udpSendSock.close()
     
     def setMedia(self, mediaFile):
@@ -142,6 +152,7 @@ class udpServer(QThread):
     pause = pyqtSignal()
     fullscreen = pyqtSignal()
     udpSender = pyqtSignal(str)
+    playlist_id = pyqtSignal(int)
 
     def __init__(self, parent = None):
         super(udpServer, self).__init__(parent)        
@@ -151,18 +162,23 @@ class udpServer(QThread):
         self.play_id = 0
     
     def run(self):
+        global playlist_id, current_playlist
         while True:
             data, info = self.sock.recvfrom(65535)
             recv_Msg = data.decode()
+            print(recv_Msg)
             try:
                 if recv_Msg.startswith('stop'):
                     self.stop.emit()
                 elif recv_Msg.startswith('pause'):
                     self.pause.emit()
-                elif recv_Msg.startswith('playid'):
-                    self.play_id = int(re.findall('\d+', recv_Msg)[0])
+                elif recv_Msg.startswith('pi,'):
+                    pi = recv_Msg.split(",", 2)
+                    playlist_id = int(pi[1])
+                    self.play_id = int(pi[2])
+                    current_playlist = (list(playlistGroup[playlist_id].find()))
                     self.playId()
-                elif recv_Msg.startswith('play'):
+                elif recv_Msg.startswith('p,'):
                     try:
                         func, file = recv_Msg.split(",")
                         self.playFile(file)
@@ -186,10 +202,11 @@ class udpServer(QThread):
             pass
 
     def playId(self):
+        global current_playlist
         try:
-            count = db.playlist.count_documents({})
+            count = len(current_playlist)
             if self.play_id <= int(count)-1:
-                file = db.playlist.find_one({'playid': self.play_id}, { 'complete_name': 1 })['complete_name']
+                file = current_playlist[self.play_id]["complete_name"]
                 if os.path.isfile(file):
                     self.udpSender.emit('self.play_id,{}'.format(self.play_id))
                     self.playFile(file)
@@ -217,6 +234,7 @@ class udpServer(QThread):
         if self.setup['loop_one'] == True:
             # self.stop.emit()
             self.playId()
+            self.udpSender.emit("playid,{}".format(self.play_id))
         elif self.setup['loop'] == True:
             count = db.playlist.count_documents({})
             if self.play_id >= int(count)-1:
@@ -225,8 +243,10 @@ class udpServer(QThread):
                 self.play_id = self.play_id + 1
                 print(self.play_id)
             self.playId()
+            self.udpSender.emit("playid,{}".format(self.play_id))
         elif self.setup['endclose'] == True:
             self.stop.emit()
+            self.udpSender.emit("stop")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

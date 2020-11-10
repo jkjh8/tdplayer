@@ -1,6 +1,5 @@
 from pymongo import MongoClient
 
-
 def api(data, db):    
     if data.startswith("returnip"):
         # currentdbId = db.setup.find_one({},{'_id': 1})
