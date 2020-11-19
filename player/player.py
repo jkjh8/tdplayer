@@ -26,7 +26,8 @@ current_playlist = []
 playlistGroup = []
 for i in range(8):
     playlistGroup.append(db['playlist_{}'.format(i)])
-
+setup = db['setups']
+filelist = db['filelists']
 
 class PlayerServer(QVideoWidget):
     songFinishedEvent = pyqtSignal()
@@ -52,7 +53,7 @@ class PlayerServer(QVideoWidget):
         self.setNewPlayer()
         self.show()
 
-        self.setup = db.setup.find_one({})
+        self.setup = setup.find_one({})
         print (self.setup)
         try:
             if self.setup['fullscreen'] == True:
@@ -62,7 +63,7 @@ class PlayerServer(QVideoWidget):
                 self.fullscreenCurrent = False
 
             if self.setup['poweronplay'] == True:
-                file = db.playlist.find_one({'playid': 0}, { 'complete_name': 1 })['complete_name']
+                file = playlistGroup[playlist_id].find_one({'playid': 0}, { 'complete_name': 1 })['complete_name']
                 # sleep(5)
                 self.play(file)
         except:
@@ -71,15 +72,18 @@ class PlayerServer(QVideoWidget):
     def setupUI(self):
         self.setWindowTitle("MEDIA SERVER")
         self.setWindowIcon(QIcon('favicon_player.ico'))
-        self.setStyleSheet("background-color: black;")
-        # self.logo = QLabel(self)
-        # # self.logo.setText("1234")
-        # self.logo.resize(1920,1080)
-        # self.pix = QPixmap()
-        # self.pix.load("logo.png")
-        # # self.pix = self.pix.scaledToWidth(600)
-        # self.logo.setPixmap(self.pix)
-        # self.logo.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet("background-color: white;")
+        self.logo = QLabel(self)
+        self.pix = QPixmap()
+        self.pix.load("logo.png")
+        self.pix = self.pix.scaledToWidth(600)
+        self.logo.setPixmap(self.pix)
+        self.logo.setAlignment(Qt.AlignCenter)
+
+        self.h_box = QHBoxLayout(self)
+        self.v_box = QVBoxLayout()
+        self.h_box.addLayout(self.v_box)
+        self.v_box.addWidget(self.logo)
 
     def setNewPlayer(self):
         self.instance = vlc.Instance()
@@ -96,7 +100,7 @@ class PlayerServer(QVideoWidget):
     @pyqtSlot(str)
     def udpSender(self, msg):
         self.udpSendSock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udpSendSock.sendto(msg.encode('utf-16'), (self.setup['rtIp'], self.setup['rtPort']))
+        self.udpSendSock.sendto(msg.encode('utf-8'), (self.setup['rtIp'], self.setup['rtPort']))
         self.udpSendSock.close()
     
     def setMedia(self, mediaFile):
@@ -121,7 +125,7 @@ class PlayerServer(QVideoWidget):
 
     @pyqtSlot()
     def fullscreen(self):
-        self.setup = db.setup.find_one({})
+        self.setup = setup.find_one({})
         if self.fullscreenCurrent != self.setup['fullscreen']:
             self.setFullScreen(self.setup['fullscreen'])
             self.fullscreenCurrent = self.setup['fullscreen']
@@ -172,31 +176,36 @@ class udpServer(QThread):
                     self.stop.emit()
                 elif recv_Msg.startswith('pause'):
                     self.pause.emit()
+                elif recv_Msg.startswith('fullscreen'):
+                    self.fullscreen.emit()
                 elif recv_Msg.startswith('pi,'):
                     pi = recv_Msg.split(",", 2)
                     playlist_id = int(pi[1])
                     self.play_id = int(pi[2])
                     current_playlist = (list(playlistGroup[playlist_id].find()))
                     self.playId()
+                elif recv_Msg.startswith('pl,'):
+                    pl = recv_Msg.split(",", 1)
+                    playlist_id = int(pl[1])
+                    self.play_id = 0
+                    current_playlist = (list(playlistGroup[playlist_id].find()))
+                    self.playId()
                 elif recv_Msg.startswith('p,'):
-                    try:
-                        func, file = recv_Msg.split(",")
-                        self.playFile(file)
-                    except:
-                        pass
+                    func, file = recv_Msg.split(",")
                 elif recv_Msg.startswith('refresh'):
                     pass
                 else:
-                    msg = api(recv_Msg, db)                          
+                    msg = api(recv_Msg, setup, playlistGroup, filelist)                          
                     self.udpSender.emit(msg)
-                    start_new_thread(self.request_setup, (msg,))
-                self.fullscreen.emit()
+                    self.fullscreen.emit()
+                    # start_new_thread(self.request_setup, (msg,))
+                
             except:
                 self.udpSender("unknown message")
 
     def request_setup(self, msg):
         try:
-            conn = requests.get('http://127.0.0.1:12300/setupfromplayer')
+            conn = requests.get('http://127.0.0.1:3000/setupfromplayer')
             print(conn.content)
         except:
             pass
@@ -207,36 +216,37 @@ class udpServer(QThread):
             count = len(current_playlist)
             if self.play_id <= int(count)-1:
                 file = current_playlist[self.play_id]["complete_name"]
+                
                 if os.path.isfile(file):
-                    self.udpSender.emit('self.play_id,{}'.format(self.play_id))
+                    self.udpSender.emit('play:pl,id:{},list:{}'.format(self.play_id, playlist_id))
                     self.playFile(file)
                 else:
-                    self.udpSender.emit('file_error')
+                    self.udpSender.emit('err:none_file')
             else:
-                self.udpSender.emit('out_of_playlist_range')
+                self.udpSender.emit('err:outofrange')
         except:
-            self.udpSender.emit('playid error')
+            self.udpSender.emit('err:player_err')
 
     def playFile(self, mediaFile):
         try:
             file = os.path.join(MEDIA_PATH, mediaFile)
             if os.path.isfile(file):
                 self.play.emit(file)
-                self.udpSender.emit('play,{}'.format(mediaFile))
+                self.udpSender.emit('play:p,file:{}'.format(mediaFile))
             else:
-                self.udpSender.emit('file_error')
+                self.udpSender.emit('err:none_file')
         except:
-            self.udpSender.emit('file_error')
+            self.udpSender.emit('err:player_err')
     
     @pyqtSlot()
     def songFinished(self):
-        self.setup = db.setup.find_one({})
+        self.setup = setup.find_one({})
         if self.setup['loop_one'] == True:
             # self.stop.emit()
             self.playId()
             self.udpSender.emit("playid,{}".format(self.play_id))
         elif self.setup['loop'] == True:
-            count = db.playlist.count_documents({})
+            count = len(current_playlist)
             if self.play_id >= int(count)-1:
                 self.play_id = 0
             else:
@@ -246,7 +256,7 @@ class udpServer(QThread):
             self.udpSender.emit("playid,{}".format(self.play_id))
         elif self.setup['endclose'] == True:
             self.stop.emit()
-            self.udpSender.emit("stop")
+            self.udpSender.emit("stop:true")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
