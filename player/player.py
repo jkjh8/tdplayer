@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import sys, vlc, socket, os.path, threading, json, re, requests
+import sys, vlc, socket, os.path, threading, json, re, requests, json
 from _thread import *
 # from time import sleep
 from player_api import api
@@ -49,6 +49,11 @@ class PlayerServer(QVideoWidget):
         self.udpServer.fullscreen.connect(self.fullscreen)
         self.udpServer.udpSender.connect(self.udpSender)
         self.songFinishedEvent.connect(self.udpServer.songFinished)
+
+        self.mc_grp = '230.128.128.128'
+        self.mc_port = 12345
+        self.mc_sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        self.mc_sender.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
 
         self.setNewPlayer()
         self.show()
@@ -111,6 +116,8 @@ class PlayerServer(QVideoWidget):
     def play(self, mediaFile):
         if self.mediafile == mediaFile: self.player.stop()
         else: self.mediafile = mediaFile; self.setMedia(mediaFile)
+        rtjson = { 'playlist': playlist_id, 'playfile': os.path.basename(mediaFile) }
+        self.mc_sender.sendto(json.dumps(rtjson).encode('utf-8'), (self.mc_grp, self.mc_port))
         self.player.play()
         self.fullscreen()
 
@@ -121,6 +128,8 @@ class PlayerServer(QVideoWidget):
     @pyqtSlot()
     def stop(self):
         self.player.stop()
+        rtjson = { 'stop': True }
+        self.mc_sender.sendto(json.dumps(rtjson).encode('utf-8'), (self.mc_grp, self.mc_port))
         self.mediafile = None
 
     @pyqtSlot()
@@ -132,6 +141,8 @@ class PlayerServer(QVideoWidget):
 
     def songFinished(self,evnet):
         self.songFinishedEvent.emit()
+        rtjson = { 'stop': True }
+        self.mc_sender.sendto(json.dumps(rtjson).encode('utf-8'), (self.mc_grp, self.mc_port))
 
     def getMediaLength(self, time, player):
         sendTime = timeFormat(time.u.new_length)
@@ -140,14 +151,16 @@ class PlayerServer(QVideoWidget):
             start_new_thread(self.udpSender, ('length,{}'.format(sendTime),))
 
     def getCurrentTime(self, time, player):
-        if self.setup['progress']:
-            start_new_thread(self.currentTimeProcess, (time,))
+        start_new_thread(self.currentTimeProcess, (time,))
     
     def currentTimeProcess(self, time):
         sendTime = timeFormat(time.u.new_time)
         if self.curr_time != sendTime:
             self.curr_time = sendTime
-            self.udpSender('current,{}'.format(sendTime))
+            rtjson = { 'duration': sendTime }
+            self.mc_sender.sendto(json.dumps(rtjson).encode('utf-8'), (self.mc_grp, self.mc_port))
+            if self.setup['progress']:
+                self.udpSender('current,{}'.format(sendTime))
 
 
 class udpServer(QThread):
@@ -159,7 +172,7 @@ class udpServer(QThread):
     playlist_id = pyqtSignal(int)
 
     def __init__(self, parent = None):
-        super(udpServer, self).__init__(parent)        
+        super(udpServer, self).__init__(parent)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('0.0.0.0', port))
         print("Udp Server Start {} : {}".format('0.0.0.0', 12302))
