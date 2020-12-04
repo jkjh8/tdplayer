@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-import sys, vlc, socket, os.path, threading, json, re, requests, json
+import sys, vlc, socket, os.path, threading, json, re, requests, json, time, struct
+from datetime import datetime
 from _thread import *
 # from time import sleep
 from player_api import api
@@ -28,11 +29,12 @@ for i in range(8):
     playlistGroup.append(db['playlist_{}'.format(i)])
 setup = db['setups']
 filelist = db['filelists']
+scheduleList = db['schedules']
 
 class PlayerServer(QVideoWidget):
     songFinishedEvent = pyqtSignal()
     def __init__(self):
-        super().__init__()        
+        super().__init__()
         self.setupUI()
         self.playlist = None
         self.mediafile = None
@@ -40,8 +42,12 @@ class PlayerServer(QVideoWidget):
         self.duration = None
         self.playlist_id = None
         self.fullscreenCurrent = False
+        
+        self.multicastServer = multicastServer()
         self.udpServer = udpServer()
+        
         self.udpServer.start()
+        self.multicastServer.start()
 
         self.udpServer.play.connect(self.play)
         self.udpServer.stop.connect(self.stop)
@@ -145,6 +151,8 @@ class PlayerServer(QVideoWidget):
         self.mc_sender.sendto(json.dumps(rtjson).encode('utf-8'), (self.mc_grp, self.mc_port))
 
     def getMediaLength(self, time, player):
+        rtjson = { 'length': time.u.new_time }
+        self.mc_sender.sendto(json.dumps(rtjson).encode('utf-8'), (self.mc_grp, self.mc_port))
         sendTime = timeFormat(time.u.new_length)
         if self.duration != sendTime:
             self.duration = sendTime
@@ -157,7 +165,7 @@ class PlayerServer(QVideoWidget):
         sendTime = timeFormat(time.u.new_time)
         if self.curr_time != sendTime:
             self.curr_time = sendTime
-            rtjson = { 'duration': sendTime }
+            rtjson = { 'duration': time.u.new_time }
             self.mc_sender.sendto(json.dumps(rtjson).encode('utf-8'), (self.mc_grp, self.mc_port))
             if self.setup['progress']:
                 self.udpSender('current,{}'.format(sendTime))
@@ -177,44 +185,76 @@ class udpServer(QThread):
         self.sock.bind(('0.0.0.0', port))
         print("Udp Server Start {} : {}".format('0.0.0.0', 12302))
         self.play_id = 0
+
+        self.scheduleRefrash()
+        self.timer = QTimer()
+        self.timer.setInterval(1000)
+        self.timer.timeout.connect(self.checkSchedule)
+        self.checkSchedule()
+        self.timer.start()
     
     def run(self):
-        global playlist_id, current_playlist
         while True:
             data, info = self.sock.recvfrom(65535)
             recv_Msg = data.decode()
-            print(recv_Msg)
-            try:
-                if recv_Msg.startswith('stop'):
-                    self.stop.emit()
-                elif recv_Msg.startswith('pause'):
-                    self.pause.emit()
-                elif recv_Msg.startswith('fullscreen'):
-                    self.fullscreen.emit()
-                elif recv_Msg.startswith('pi,'):
-                    pi = recv_Msg.split(",", 2)
-                    playlist_id = int(pi[1])
-                    self.play_id = int(pi[2])
-                    current_playlist = (list(playlistGroup[playlist_id].find()))
-                    self.playId()
-                elif recv_Msg.startswith('pl,'):
-                    pl = recv_Msg.split(",", 1)
-                    playlist_id = int(pl[1])
-                    self.play_id = 0
-                    current_playlist = (list(playlistGroup[playlist_id].find()))
-                    self.playId()
-                elif recv_Msg.startswith('p,'):
-                    func, file = recv_Msg.split(",")
-                elif recv_Msg.startswith('refresh'):
-                    pass
-                else:
-                    msg = api(recv_Msg, setup, playlistGroup, filelist)                          
-                    self.udpSender.emit(msg)
-                    self.fullscreen.emit()
-                    # start_new_thread(self.request_setup, (msg,))
-                
-            except:
-                self.udpSender("unknown message")
+            self.funcParcer(recv_Msg)
+
+    def scheduleRefrash(self):
+        self.schedule = list(scheduleList.find())
+        print(self.schedule)
+
+    def checkSchedule(self):
+        timestamp = round(time.time())
+        for val in self.schedule:
+            if val['end'] > timestamp:
+                d = datetime.fromtimestamp(val['start']/1000).time()
+                t = datetime.fromtimestamp(timestamp).time()
+                if d == t:
+                    print(val)
+                    if val['event'] == "플레이리스트":
+                        print('플레이 리스트!')
+                        self.funcParcer('pl,{}'.format(val['playlist']))
+                    if val['event'] == "Stop":
+                        self.funcParcer('stop')
+                    if val['event'] == '파일':
+                        self.playFile(val['file'])
+
+    def funcParcer(self, msg):
+        global playlist_id, current_playlist
+        print(msg)
+        try:
+            if msg.startswith('stop'):
+                self.stop.emit()
+            elif msg.startswith('pause'):
+                self.pause.emit()
+            elif msg.startswith('fullscreen'):
+                self.fullscreen.emit()
+            elif msg.startswith('refrashSchedule'):
+                self.scheduleRefrash()
+                print('Schedule refrashed!')
+            elif msg.startswith('pi,'):
+                pi = msg.split(",", 2)
+                playlist_id = int(pi[1])
+                self.play_id = int(pi[2])
+                current_playlist = (list(playlistGroup[playlist_id].find()))
+                self.playId()
+            elif msg.startswith('pl,'):
+                print('pl')
+                pl = msg.split(",", 1)
+                playlist_id = int(pl[1])
+                self.play_id = 0
+                current_playlist = (list(playlistGroup[playlist_id].find()))
+                self.playId()
+            elif msg.startswith('p,'):
+                func, file = msg.split(",")
+            elif msg.startswith('refresh'):
+                pass
+            else:
+                msg = api(msg, setup, playlistGroup, filelist)                          
+                self.udpSender.emit(msg)
+                self.fullscreen.emit()
+        except:
+            self.udpSender("unknown message")
 
     def request_setup(self, msg):
         try:
@@ -270,6 +310,25 @@ class udpServer(QThread):
         elif self.setup['endclose'] == True:
             self.stop.emit()
             self.udpSender.emit("stop:true")
+
+class multicastServer(QThread):
+    mcServerEvent = pyqtSignal(str)
+
+    def __init__(self, parent = None):
+        super(multicastServer, self).__init__(parent)
+        self.length = 0
+        self.duration = 0
+        self.mc_group = "230.128.128.128"
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR,1)
+        self.sock.bind(('0.0.0.0', 12345))
+        mreq = struct.pack("4sl", socket.inet_aton(self.mc_group), socket.INADDR_ANY)
+        self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        
+    def run(self):
+        while True:
+            recvMsg = json.loads(self.sock.recv(10240))
+            print(recvMsg)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
